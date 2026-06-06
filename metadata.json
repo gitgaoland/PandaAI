@@ -1,0 +1,6 @@
+{
+  "name": "Panda AI 博客",
+  "description": "简约现代的内容中心个人博客网站，内建政经历史等分类，搭载 Panda AI 智能阅读助理与创作者后台。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
