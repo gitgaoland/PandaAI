@@ -1,4 +1,3 @@
-import { kv } from "@vercel/kv";
 import { Post, Comment, Category } from "../src/types";
 
 interface DBData {
@@ -14,11 +13,33 @@ interface DBData {
   };
 }
 
+let kvClient: any = null;
+let memoryDB: DBData | null = null;
+
+async function getKV() {
+  if (kvClient !== null) return kvClient;
+  if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
+    try {
+      const mod = await import("@vercel/kv");
+      kvClient = mod.kv;
+      return kvClient;
+    } catch (e) {
+      console.error("Failed to load @vercel/kv", e);
+    }
+  }
+  return null;
+}
+
 async function readDB(): Promise<DBData> {
   try {
-    const data = await kv.get<DBData>("blog_db");
-    if (data) {
-      return data;
+    const kv = await getKV();
+    if (kv) {
+      const data = await kv.get<DBData>("blog_db");
+      if (data) {
+        return data;
+      }
+    } else if (memoryDB) {
+      return memoryDB;
     }
   } catch (error) {
     console.error("Error reading database from KV, using fallback empty state", error);
@@ -38,7 +59,12 @@ async function readDB(): Promise<DBData> {
   };
   
   try {
-    await kv.set("blog_db", defaultData);
+    const kv = await getKV();
+    if (kv) {
+      await kv.set("blog_db", defaultData);
+    } else {
+      memoryDB = defaultData;
+    }
   } catch (e) {
     console.error("Failed to initialize KV store", e);
   }
@@ -47,7 +73,12 @@ async function readDB(): Promise<DBData> {
 
 async function writeDB(data: DBData): Promise<void> {
   try {
-    await kv.set("blog_db", data);
+    const kv = await getKV();
+    if (kv) {
+      await kv.set("blog_db", data);
+    } else {
+      memoryDB = data;
+    }
   } catch (error) {
     console.error("Error writing database to KV", error);
   }
