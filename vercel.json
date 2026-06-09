@@ -1,4 +1,5 @@
 {
+  "outputDirectory": "DWeb",
   "rewrites": [
     {
       "source": "/api/(.*)",
