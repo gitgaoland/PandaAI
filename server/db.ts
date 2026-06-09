@@ -1,8 +1,5 @@
-import fs from "fs/promises";
-import path from "path";
+import { kv } from "@vercel/kv";
 import { Post, Comment, Category } from "../src/types";
-
-const DB_FILE = path.join(process.cwd(), "server", "db.json");
 
 interface DBData {
   posts: Post[];
@@ -19,27 +16,41 @@ interface DBData {
 
 async function readDB(): Promise<DBData> {
   try {
-    const data = await fs.readFile(DB_FILE, "utf-8");
-    return JSON.parse(data) as DBData;
+    const data = await kv.get<DBData>("blog_db");
+    if (data) {
+      return data;
+    }
   } catch (error) {
-    console.error("Error reading database file, using fallback empty state", error);
-    return {
-      posts: [],
-      comments: [],
-      adminSettings: {
-        title: "Panda AI 博客",
-        bloggerName: "熊猫 AI 主理人",
-        bloggerBio: "Panda AI 博客主理人",
-        bloggerAvatar: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=150&q=80",
-        adminPassword: "admin",
-        aboutContent: "关于我的内容暂未编辑。"
-      }
-    };
+    console.error("Error reading database from KV, using fallback empty state", error);
   }
+  
+  const defaultData: DBData = {
+    posts: [],
+    comments: [],
+    adminSettings: {
+      title: "Panda AI 博客",
+      bloggerName: "熊猫 AI 主理人",
+      bloggerBio: "Panda AI 博客主理人",
+      bloggerAvatar: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=150&q=80",
+      adminPassword: "admin",
+      aboutContent: "关于我的内容暂未编辑。"
+    }
+  };
+  
+  try {
+    await kv.set("blog_db", defaultData);
+  } catch (e) {
+    console.error("Failed to initialize KV store", e);
+  }
+  return defaultData;
 }
 
 async function writeDB(data: DBData): Promise<void> {
-  await fs.writeFile(DB_FILE, JSON.stringify(data, null, 2), "utf-8");
+  try {
+    await kv.set("blog_db", data);
+  } catch (error) {
+    console.error("Error writing database to KV", error);
+  }
 }
 
 export const dbService = {

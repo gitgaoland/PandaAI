@@ -1,8 +1,8 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { createServer as createViteServer } from "vite";
 import { dbService } from "./server/db";
+import { put } from "@vercel/blob";
 import { askPostAssistant, helpWriter } from "./server/gemini";
 
 // Helper to authenticate Admin requests via password in database
@@ -25,20 +25,12 @@ async function authMiddleware(req: express.Request, res: express.Response, next:
   }
 }
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+const app = express();
+const PORT = process.env.PORT || 3000;
 
   // Request body parsing - increased limits for base64 image uploads
   app.use(express.json({ limit: "25mb" }));
   app.use(express.urlencoded({ limit: "25mb", extended: true }));
-
-  // Static files hosting for uploaded post covers
-  const uploadDir = path.join(process.cwd(), "uploads");
-  if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-  }
-  app.use("/uploads", express.static(uploadDir));
 
   // --- API Routes ---
 
@@ -61,12 +53,11 @@ async function startServer() {
       const buffer = Buffer.from(matches[2], "base64");
       const ext = path.extname(filename) || ".jpg";
       const safeName = `cover-${Date.now()}-${Math.floor(Math.random() * 100000)}${ext}`;
-      const filePath = path.join(uploadDir, safeName);
 
-      fs.writeFileSync(filePath, buffer);
-      res.json({ url: `/uploads/${safeName}`, success: true });
+      const blob = await put(safeName, buffer, { access: 'public' });
+      res.json({ url: blob.url, success: true });
     } catch (error: any) {
-      res.status(500).json({ error: error.message || "文件写入服务器出错" });
+      res.status(500).json({ error: error.message || "上传图片到服务器出错" });
     }
   });
   
@@ -337,12 +328,18 @@ async function startServer() {
 
   // --- Vite & Production static serving ---
   if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
+    import("vite").then(async ({ createServer: createViteServer }) => {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+      app.listen(PORT, "0.0.0.0", () => {
+        console.log(`Local Dev Server is running on http://localhost:${PORT}`);
+      });
     });
-    app.use(vite.middlewares);
   } else {
+    // 生产环境中，由 Vercel 托管静态页面。保留此回退可兼顾本地 build 测试。
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*all", (req, res) => {
@@ -350,9 +347,4 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Panda AI Blog Server is strictly running on http://localhost:${PORT}`);
-  });
-}
-
-startServer();
+export default app;
