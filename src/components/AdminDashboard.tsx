@@ -86,8 +86,8 @@ export default function AdminDashboard({
       setUploadError("只支持上传图片格式的文件！");
       return;
     }
-    if (file.size > 15 * 1024 * 1024) {
-      setUploadError("文件大小超过 15MB 限制！");
+    if (file.size > 10 * 1024 * 1024) {
+      setUploadError("文件大小超过 10MB 限制！");
       return;
     }
 
@@ -96,45 +96,23 @@ export default function AdminDashboard({
     setUploadSuccess(false);
 
     try {
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-        const base64Data = reader.result as string;
-        try {
-          const res = await fetch("/api/upload", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${token}`
-            },
-            body: JSON.stringify({
-              image: base64Data,
-              filename: file.name
-            })
-          });
-          const data = await res.json();
-          if (res.ok && data.success) {
-            setPostForm(prev => ({
-              ...prev,
-              coverImage: data.url
-            }));
-            setUploadSuccess(true);
-            setTimeout(() => setUploadSuccess(false), 3000);
-          } else {
-            setUploadError(data.error || "照片上传解析失败，请检查网络阻抗");
-          }
-        } catch {
-          setUploadError("网络或接口错误，上传失败");
-        } finally {
-          setIsUploading(false);
-        }
-      };
-      reader.onerror = () => {
-        setUploadError("读取本地图片失败");
-        setIsUploading(false);
-      };
-      reader.readAsDataURL(file);
-    } catch {
-      setUploadError("本地文件选择模块发生异常");
+      // Use Vercel Blob client-side upload to bypass 4.5MB serverless function body limit.
+      // The browser uploads the file directly to Blob storage — the server only issues a token.
+      const { upload } = await import("@vercel/blob/client");
+
+      const blob = await upload(file.name, file, {
+        access: "public",
+        handleUploadUrl: "/api/upload",
+        clientPayload: token, // pass auth token for server-side verification
+      });
+
+      setPostForm(prev => ({ ...prev, coverImage: blob.url }));
+      setUploadSuccess(true);
+      setTimeout(() => setUploadSuccess(false), 3000);
+    } catch (e: any) {
+      console.error("Upload error:", e);
+      setUploadError("上传失败: " + (e?.message || String(e)));
+    } finally {
       setIsUploading(false);
     }
   };

@@ -34,30 +34,40 @@ const PORT = process.env.PORT || 3000;
 
   // --- API Routes ---
 
-  // Upload Image Core Endpoint
-  app.post("/api/upload", authMiddleware, async (req, res) => {
+  // Upload Image - Vercel Blob client upload token handler
+  // This issues a one-time upload token to the browser so it can upload directly to Blob
+  // bypassing the 4.5MB Vercel Serverless Function body limit entirely.
+  app.post("/api/upload", async (req, res) => {
     try {
-      const { image, filename } = req.body;
-      if (!image || !filename) {
-        res.status(400).json({ error: "缺少图片数据或文件名" });
-        return;
-      }
+      // Import handleUpload dynamically
+      const { handleUpload } = await import("@vercel/blob/client");
 
-      // Check if base64 format is valid
-      const matches = image.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-      if (!matches || matches.length !== 3) {
-        res.status(400).json({ error: "图片格式不正确，必须为 Base64 格式" });
-        return;
-      }
+      const response = await handleUpload({
+        body: req.body,
+        request: req as any,
+        onBeforeGenerateToken: async (pathname, clientPayload) => {
+          // Verify auth token passed by the client as clientPayload
+          const token = clientPayload;
+          const privateSettings = await dbService.getPrivateSettings();
+          if (!token || token !== privateSettings.adminPassword) {
+            throw new Error("Unauthorized: invalid token");
+          }
 
-      const buffer = Buffer.from(matches[2], "base64");
-      const ext = path.extname(filename) || ".jpg";
-      const safeName = `cover-${Date.now()}-${Math.floor(Math.random() * 100000)}${ext}`;
+          return {
+            allowedContentTypes: ["image/jpeg", "image/png", "image/gif", "image/webp", "image/jpg"],
+            maximumSizeInBytes: 10 * 1024 * 1024, // 10MB
+          };
+        },
+        onUploadCompleted: async ({ blob }) => {
+          console.log("Image upload completed:", blob.url);
+        },
+      });
 
-      const blob = await put(safeName, buffer, { access: 'public' });
-      res.json({ url: blob.url, success: true });
+      res.json(response);
     } catch (error: any) {
-      res.status(500).json({ error: error.message || "上传图片到服务器出错" });
+      console.error("Upload token error:", error);
+      const statusCode = error.message?.startsWith("Unauthorized") ? 401 : 500;
+      res.status(statusCode).json({ error: error.message || "获取上传凭证失败" });
     }
   });
   
