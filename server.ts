@@ -34,52 +34,27 @@ const PORT = process.env.PORT || 3000;
 
   // --- API Routes ---
 
-  // Upload Image - Vercel Blob client upload token handler
-  app.post("/api/upload", async (req, res) => {
+  // Upload Image — server receives compressed base64, uploads to Blob with put()
+  app.post("/api/upload", authMiddleware, async (req, res) => {
     try {
-      const { handleUpload } = await import("@vercel/blob/client");
-
-      // handleUpload expects a standard Web API Request, not Express req.
-      // We must build it manually so Vercel Blob can resolve the callback URL correctly.
-      const protocol = (req.headers["x-forwarded-proto"] as string) || req.protocol || "https";
-      const host = (req.headers["x-forwarded-host"] as string) || req.headers.host || "localhost";
-      const fullUrl = `${protocol}://${host}${req.originalUrl}`;
-
-      const headerEntries: [string, string][] = Object.entries(req.headers)
-        .filter(([, v]) => v !== undefined)
-        .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : String(v)]);
-
-      const webRequest = new Request(fullUrl, {
-        method: "POST",
-        headers: new Headers(headerEntries),
-        body: JSON.stringify(req.body),
-      });
-
-      const response = await handleUpload({
-        body: req.body,
-        request: webRequest,
-        onBeforeGenerateToken: async (pathname, clientPayload) => {
-          // Verify the auth token passed as clientPayload by the browser
-          const token = clientPayload;
-          const privateSettings = await dbService.getPrivateSettings();
-          if (!token || token !== privateSettings.adminPassword) {
-            throw new Error("Unauthorized: invalid token");
-          }
-          return {
-            allowedContentTypes: ["image/jpeg", "image/png", "image/gif", "image/webp", "image/jpg"],
-            maximumSizeInBytes: 10 * 1024 * 1024, // 10MB
-          };
-        },
-        onUploadCompleted: async ({ blob }) => {
-          console.log("Image upload completed:", blob.url);
-        },
-      });
-
-      res.json(response);
+      const { image, filename } = req.body;
+      if (!image || !filename) {
+        res.status(400).json({ error: "缺少图片数据或文件名" });
+        return;
+      }
+      const matches = (image as string).match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
+      if (!matches || matches.length !== 3) {
+        res.status(400).json({ error: "图片格式不正确，必须为 Base64 格式" });
+        return;
+      }
+      const buffer = Buffer.from(matches[2], "base64");
+      const ext = path.extname(filename).toLowerCase() || ".jpg";
+      const safeName = `cover-${Date.now()}-${Math.floor(Math.random() * 100000)}${ext}`;
+      const blob = await put(safeName, buffer, { access: "public" });
+      res.json({ url: blob.url, success: true });
     } catch (error: any) {
       console.error("Upload error:", error);
-      const statusCode = String(error.message).startsWith("Unauthorized") ? 401 : 500;
-      res.status(statusCode).json({ error: error.message || "上传凭证获取失败" });
+      res.status(500).json({ error: error.message || "图片上传失败" });
     }
   });
   

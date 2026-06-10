@@ -81,13 +81,45 @@ export default function AdminDashboard({
     }
   };
 
+  // Compress image in-browser via Canvas before uploading.
+  // Target: final base64 string < 3.5MB so the HTTP body stays under Vercel's 4.5MB limit.
+  const compressToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const objectUrl = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        // Resize: max 1400px on longest edge
+        const MAX = 1400;
+        let { width, height } = img;
+        if (width > MAX || height > MAX) {
+          if (width >= height) { height = Math.round(height * MAX / width); width = MAX; }
+          else { width = Math.round(width * MAX / height); height = MAX; }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d")!;
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // Try quality 0.82, if still too big reduce further
+        let quality = 0.82;
+        let dataUrl = canvas.toDataURL("image/jpeg", quality);
+        // base64 length / 1.37 ≈ byte size; keep under 3.4MB
+        while (dataUrl.length > 3.4 * 1024 * 1024 * 1.37 && quality > 0.3) {
+          quality -= 0.1;
+          dataUrl = canvas.toDataURL("image/jpeg", quality);
+        }
+        resolve(dataUrl);
+      };
+      img.onerror = reject;
+      img.src = objectUrl;
+    });
+  };
+
   const uploadFileToServer = async (file: File) => {
     if (!file.type.startsWith("image/")) {
       setUploadError("只支持上传图片格式的文件！");
-      return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      setUploadError("文件大小超过 10MB 限制！");
       return;
     }
 
@@ -96,22 +128,36 @@ export default function AdminDashboard({
     setUploadSuccess(false);
 
     try {
-      // Use Vercel Blob client-side upload to bypass 4.5MB serverless function body limit.
-      // The browser uploads the file directly to Blob storage — the server only issues a token.
-      const { upload } = await import("@vercel/blob/client");
+      const base64Data = await compressToBase64(file);
 
-      const blob = await upload(file.name, file, {
-        access: "public",
-        handleUploadUrl: "/api/upload",
-        clientPayload: token, // pass auth token for server-side verification
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({ image: base64Data, filename: file.name }),
       });
 
-      setPostForm(prev => ({ ...prev, coverImage: blob.url }));
-      setUploadSuccess(true);
-      setTimeout(() => setUploadSuccess(false), 3000);
+      let data: any;
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        setUploadError(`服务器错误 (${res.status})：${text.slice(0, 120)}`);
+        return;
+      }
+
+      if (res.ok && data.success) {
+        setPostForm(prev => ({ ...prev, coverImage: data.url }));
+        setUploadSuccess(true);
+        setTimeout(() => setUploadSuccess(false), 3000);
+      } else {
+        setUploadError(data.error || "上传失败，请重试");
+      }
     } catch (e: any) {
-      console.error("Upload error:", e);
-      setUploadError("上传失败: " + (e?.message || String(e)));
+      setUploadError("网络错误：" + (e?.message || String(e)));
     } finally {
       setIsUploading(false);
     }
