@@ -1,3 +1,4 @@
+import { put, list, del } from "@vercel/blob";
 import { Post, Comment, Category } from "../src/types";
 
 interface DBData {
@@ -13,74 +14,65 @@ interface DBData {
   };
 }
 
-let kvClient: any = null;
-let memoryDB: DBData | null = null;
-
-async function getKV() {
-  if (kvClient !== null) return kvClient;
-  if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
-    try {
-      const mod = await import("@vercel/kv");
-      kvClient = mod.kv;
-      return kvClient;
-    } catch (e) {
-      console.error("Failed to load @vercel/kv", e);
-    }
+const defaultData: DBData = {
+  posts: [],
+  comments: [],
+  adminSettings: {
+    title: "Panda AI 博客",
+    bloggerName: "熊猫 AI 主理人",
+    bloggerBio: "Panda AI 博客主理人",
+    bloggerAvatar: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=150&q=80",
+    adminPassword: "admin",
+    aboutContent: "关于我的内容暂未编辑。"
   }
-  return null;
-}
+};
+
+let memoryDB: DBData | null = null;
+const BLOB_PREFIX = "blog_data_store";
 
 async function readDB(): Promise<DBData> {
+  // Use memory cache during the same serverless function lifecycle
+  if (memoryDB) return memoryDB;
+  
   try {
-    const kv = await getKV();
-    if (kv) {
-      const data = await kv.get<DBData>("blog_db");
-      if (data) {
-        return data;
-      }
-    } else if (memoryDB) {
-      return memoryDB;
+    const { blobs } = await list({ prefix: BLOB_PREFIX, limit: 1 });
+    if (blobs && blobs.length > 0) {
+      const response = await fetch(blobs[0].url);
+      const data = await response.json();
+      memoryDB = data;
+      return data;
     }
   } catch (error) {
-    console.error("Error reading database from KV, using fallback empty state", error);
+    console.error("Error reading database from Blob", error);
   }
   
-  const defaultData: DBData = {
-    posts: [],
-    comments: [],
-    adminSettings: {
-      title: "Panda AI 博客",
-      bloggerName: "熊猫 AI 主理人",
-      bloggerBio: "Panda AI 博客主理人",
-      bloggerAvatar: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=150&q=80",
-      adminPassword: "admin",
-      aboutContent: "关于我的内容暂未编辑。"
-    }
-  };
-  
-  try {
-    const kv = await getKV();
-    if (kv) {
-      await kv.set("blog_db", defaultData);
-    } else {
-      memoryDB = defaultData;
-    }
-  } catch (e) {
-    console.error("Failed to initialize KV store", e);
-  }
+  // Initialize if empty or failed
+  memoryDB = defaultData;
+  await writeDB(defaultData);
   return defaultData;
 }
 
 async function writeDB(data: DBData): Promise<void> {
+  memoryDB = data; // Update memory immediately
   try {
-    const kv = await getKV();
-    if (kv) {
-      await kv.set("blog_db", data);
-    } else {
-      memoryDB = data;
+    // 1. Upload new data (creates unguessable URL due to random suffix)
+    await put(`${BLOB_PREFIX}.json`, JSON.stringify(data), {
+      access: "public",
+      addRandomSuffix: true,
+    });
+    
+    // 2. Cleanup old blobs to avoid accumulating garbage
+    const { blobs } = await list({ prefix: BLOB_PREFIX });
+    // Sort descending by date
+    blobs.sort((a, b) => b.uploadedAt.getTime() - a.uploadedAt.getTime());
+    
+    if (blobs.length > 1) {
+      // Delete all except the newest one
+      const urlsToDelete = blobs.slice(1).map(b => b.url);
+      await del(urlsToDelete);
     }
   } catch (error) {
-    console.error("Error writing database to KV", error);
+    console.error("Error writing database to Blob", error);
   }
 }
 
