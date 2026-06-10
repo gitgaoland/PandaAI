@@ -35,24 +35,36 @@ const PORT = process.env.PORT || 3000;
   // --- API Routes ---
 
   // Upload Image - Vercel Blob client upload token handler
-  // This issues a one-time upload token to the browser so it can upload directly to Blob
-  // bypassing the 4.5MB Vercel Serverless Function body limit entirely.
   app.post("/api/upload", async (req, res) => {
     try {
-      // Import handleUpload dynamically
       const { handleUpload } = await import("@vercel/blob/client");
+
+      // handleUpload expects a standard Web API Request, not Express req.
+      // We must build it manually so Vercel Blob can resolve the callback URL correctly.
+      const protocol = (req.headers["x-forwarded-proto"] as string) || req.protocol || "https";
+      const host = (req.headers["x-forwarded-host"] as string) || req.headers.host || "localhost";
+      const fullUrl = `${protocol}://${host}${req.originalUrl}`;
+
+      const headerEntries: [string, string][] = Object.entries(req.headers)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : String(v)]);
+
+      const webRequest = new Request(fullUrl, {
+        method: "POST",
+        headers: new Headers(headerEntries),
+        body: JSON.stringify(req.body),
+      });
 
       const response = await handleUpload({
         body: req.body,
-        request: req as any,
+        request: webRequest,
         onBeforeGenerateToken: async (pathname, clientPayload) => {
-          // Verify auth token passed by the client as clientPayload
+          // Verify the auth token passed as clientPayload by the browser
           const token = clientPayload;
           const privateSettings = await dbService.getPrivateSettings();
           if (!token || token !== privateSettings.adminPassword) {
             throw new Error("Unauthorized: invalid token");
           }
-
           return {
             allowedContentTypes: ["image/jpeg", "image/png", "image/gif", "image/webp", "image/jpg"],
             maximumSizeInBytes: 10 * 1024 * 1024, // 10MB
@@ -65,9 +77,9 @@ const PORT = process.env.PORT || 3000;
 
       res.json(response);
     } catch (error: any) {
-      console.error("Upload token error:", error);
-      const statusCode = error.message?.startsWith("Unauthorized") ? 401 : 500;
-      res.status(statusCode).json({ error: error.message || "获取上传凭证失败" });
+      console.error("Upload error:", error);
+      const statusCode = String(error.message).startsWith("Unauthorized") ? 401 : 500;
+      res.status(statusCode).json({ error: error.message || "上传凭证获取失败" });
     }
   });
   
