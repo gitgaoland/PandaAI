@@ -1,9 +1,9 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { dbService } from "./server/db";
+import { dbService } from "./server/db.js";
 import { put } from "@vercel/blob";
-import { askPostAssistant, helpWriter } from "./server/gemini";
+import { askPostAssistant, helpWriter } from "./server/gemini.js";
 
 // Helper to authenticate Admin requests via password in database
 async function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {

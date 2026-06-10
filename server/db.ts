@@ -1,5 +1,5 @@
 import { put, list, del } from "@vercel/blob";
-import { Post, Comment, Category } from "../src/types";
+import { Post, Comment, Category } from "../src/types.js";
 
 interface DBData {
   posts: Post[];
